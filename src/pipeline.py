@@ -10,10 +10,39 @@ import src.policies as policies
 import src.utils as u
 
 
+def default_cfg():
+	cfg = {
+		"L": 4,
+		"U": 1,
+		"H": 32,
+		"D": 15,
+		"seed": 0,
+		"dataset_size": 128,
+		"split": [0.8, 0.1, 0.1],
+		"batch_size": 64,
+		"epochs": 20,
+		"lr": 1e-3,
+		"weight_decay": 1e-4,
+		"enc_w": 1e-2,
+		"wm_w": 1.0,
+		"eval_w": 1.0,
+		"planner_samples": 64,
+		"test_limit": 16,
+		"data_dir": "data",
+		"run_name": "baseline",
+	}
+	cfg["D"] = cfg["L"] * cfg["L"] - 1
+	return cfg
+
+
 def _paths(cfg):
 	root = u.ensure_dir(cfg["data_dir"])
 	run = u.ensure_dir(root / cfg["run_name"])
 	return root, run
+
+
+def run_dir(cfg):
+	return _paths(cfg)[1]
 
 
 def _blank():
