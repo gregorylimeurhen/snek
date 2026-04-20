@@ -46,16 +46,17 @@ def _stack(xs, shape, dtype):
 
 
 def _finalize(part, size, depth):
+	n = len(env.ACTIONS)
 	out = {}
 	out["starts_snake"] = _stack(part["starts_snake"], (0, 2, 2), torch.long)
 	out["starts_food"] = _stack(part["starts_food"], (0, 2), torch.long)
 	out["tx0"] = _stack(part["tx0"], (0, 3, size, size), torch.uint8)
-	out["ta"] = _stack(part["ta"], (0,), torch.long)
-	out["tx1"] = _stack(part["tx1"], (0, 3, size, size), torch.uint8)
+	out["ta"] = _stack(part["ta"], (0, n), torch.long)
+	out["tx1"] = _stack(part["tx1"], (0, n, 3, size, size), torch.uint8)
 	out["rx0"] = _stack(part["rx0"], (0, 3, size, size), torch.uint8)
-	out["ra"] = _stack(part["ra"], (0, depth), torch.long)
-	out["rs"] = _stack(part["rs"], (0,), torch.float32)
-	out["rc"] = _stack(part["rc"], (0, depth), torch.float32)
+	out["ra"] = _stack(part["ra"], (0, n, depth), torch.long)
+	out["rs"] = _stack(part["rs"], (0, n), torch.float32)
+	out["rc"] = _stack(part["rc"], (0, n, depth), torch.float32)
 	return out
 
 
@@ -106,20 +107,30 @@ def preprocess(cfg):
 			x0 = u.image_u8(sim.display())
 			pol_act = pol.action(sim.state)
 			pol_state = pol.rng.getstate()
+			ta = []
+			tx1 = []
+			ra = []
+			rs = []
+			rc = []
 			for act in env.ACTIONS:
 				snap = sim.snapshot()
 				pol.rng.setstate(pol_state)
 				sim.step(act)
 				x1 = u.image_u8(sim.display())
-				part["tx0"].append(x0)
-				part["ta"].append(torch.tensor(u.act_id(act), dtype=torch.long))
-				part["tx1"].append(x1)
 				acts, survival, cons = _branch_rollout(sim, pol, depth, act)
-				part["rx0"].append(x0)
-				part["ra"].append(acts)
-				part["rs"].append(survival)
-				part["rc"].append(cons)
+				ta.append(u.act_id(act))
+				tx1.append(x1)
+				ra.append(acts)
+				rs.append(survival)
+				rc.append(cons)
 				sim.restore(snap)
+			part["tx0"].append(x0)
+			part["ta"].append(torch.tensor(ta, dtype=torch.long))
+			part["tx1"].append(torch.stack(tx1))
+			part["rx0"].append(x0)
+			part["ra"].append(torch.stack(ra))
+			part["rs"].append(torch.stack(rs))
+			part["rc"].append(torch.stack(rc))
 			pol.rng.setstate(pol_state)
 			sim.step(pol_act)
 			bar.set_postfix(split=split, steps=sim.state.time)
@@ -156,12 +167,13 @@ def _transition_pass(model, loader, opt, dev, cfg, train):
 	bar = tqdm.auto.tqdm(loader, leave=False, disable=not train, desc="transition")
 	for x0, a, x1 in bar:
 		x0 = u.image_f32(x0.to(dev, non_blocking=True))
-		x1 = u.image_f32(x1.to(dev, non_blocking=True))
 		a = a.to(dev, non_blocking=True)
+		x1 = u.image_f32(x1.to(dev, non_blocking=True))
 		with torch.set_grad_enabled(train):
 			h0 = model.enc(x0)
-			h1 = model.enc(x1)
-			pred = model.wm(h0, a)
+			h0 = h0.unsqueeze(1).expand(-1, a.shape[1], -1).flatten(0, 1)
+			h1 = model.enc(x1.flatten(0, 1))
+			pred = model.wm(h0, a.flatten())
 			wm = F.mse_loss(pred, h1.detach())
 			enc = 0.5 * (u.sigreg(h0) + u.sigreg(h1))
 			loss = cfg["wm_w"] * wm + cfg["enc_w"] * enc
@@ -189,10 +201,12 @@ def _rollout_pass(model, loader, opt, dev, cfg, train):
 	for x0, acts, survival, cons in bar:
 		x0 = u.image_f32(x0.to(dev, non_blocking=True))
 		acts = acts.to(dev, non_blocking=True)
-		survival = survival.to(dev, non_blocking=True)
-		cons = cons.to(dev, non_blocking=True)
+		survival = survival.to(dev, non_blocking=True).flatten()
+		cons = cons.to(dev, non_blocking=True).flatten(0, 1)
 		with torch.set_grad_enabled(train):
-			_, pred_survival, pred_cons = model.rollout(x0, acts)
+			h0 = model.enc(x0)
+			h0 = h0.unsqueeze(1).expand(-1, acts.shape[1], -1).flatten(0, 1)
+			_, pred_survival, pred_cons = model.rollout_h(h0, acts.flatten(0, 1))
 			s_loss = F.binary_cross_entropy(pred_survival, survival)
 			c_loss = F.binary_cross_entropy(pred_cons, cons)
 			loss = cfg["eval_w"] * (s_loss + c_loss)
@@ -313,7 +327,7 @@ def _score_actions(model, dev, x0, actss):
 		if n not in by_len:
 			by_len[n] = []
 		by_len[n].append((i, acts))
-	with torch.no_grad():
+	with torch.inference_mode():
 		h0 = model.enc(x0)
 		batch = _planner_batch_size(dev)
 		for pairs in by_len.values():
@@ -325,8 +339,7 @@ def _score_actions(model, dev, x0, actss):
 				h = h0.expand(chunk.shape[0], -1)
 				_, survival, cons = model.rollout_h(h, chunk)
 				vals = (survival + cons.sum(1)).cpu()
-				for j, k in enumerate(ids[lo:hi]):
-					scores[k] = vals[j]
+				scores[ids[lo:hi]] = vals
 	return scores
 
 

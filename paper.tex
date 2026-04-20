@@ -225,7 +225,8 @@ We colour and render the grid at arbitrary scale using rasterisation.
 % - consumption binary at t equals 1 if the snake (head) at t is where the food was at t-1
 
 % Define a dataset_size and global seed in config.toml
-% We generate dataset_size episodes using a "random-backbone" perturbed Hamiltonian policy (https://johnflux.com/tag/snake and https://github.com/johnflux/snake_game) with 1-step off-policy branching (for 1-step coverage on each step), meaning that at each live state of the on-policy episode, we additionally simulate each alternative action for exactly one transition, record the resulting one-step sample, and then continue the episode only along the policy action (since each off-policy branch consists of exactly one simulator step from a live state, every branched action is obviously legal)
+% We generate dataset_size episodes using a "random-backbone" perturbed Hamiltonian policy (https://johnflux.com/tag/snake and https://github.com/johnflux/snake_game) with with depth-D first-action branching
+
 % At the start of each episode, the seed:
 % 1. randomly samples a fixed Hamiltonian cycle to use as a backbone for that episode,
 % 2. follows the backbone but takes shortcuts where available (sampling uniform randomly if there happen to be equally good shortcuts)

@@ -1,6 +1,6 @@
 seed = 37
 data_dir = "data"
-run_name = "baseline"
+run_name = "rtx3090"
 
 [preprocess]
 L = 4
@@ -9,7 +9,7 @@ dataset_size = 4096
 split = [0.8, 0.1, 0.1]
 
 [train]
-H = 32
+H = 128
 batch_size = 1024
 epochs = 60
 lr = 1e-3
@@ -19,10 +19,10 @@ wm_w = 1.0
 eval_w = 1.0
 
 [test]
-planner_samples = 256
+planner_samples = 128
 test_limit = 0
 
 [explore]
 expert_steps = 12
-planner_steps = 11
+planner_steps = 15
 test_index = 0
