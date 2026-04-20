@@ -158,6 +158,15 @@ def _rollout_loader(data, batch_size, pin_memory, shuffle):
 	return cls(ds, batch_size=batch_size, pin_memory=pin_memory, shuffle=shuffle)
 
 
+def _repeat_h(h, n):
+	s = tuple(h.shape[1:])
+	return h.unsqueeze(1).expand(-1, n, *s).flatten(0, 1)
+
+
+def _flat_h(h):
+	return h.flatten(1)
+
+
 def _transition_pass(model, loader, opt, dev, cfg, train):
 	if loader is None:
 		return {"loss": 0.0, "wm": 0.0, "enc": 0.0}
@@ -171,11 +180,11 @@ def _transition_pass(model, loader, opt, dev, cfg, train):
 		x1 = u.image_f32(x1.to(dev, non_blocking=True))
 		with torch.set_grad_enabled(train):
 			h0 = model.enc(x0)
-			h0 = h0.unsqueeze(1).expand(-1, a.shape[1], -1).flatten(0, 1)
+			h0 = _repeat_h(h0, a.shape[1])
 			h1 = model.enc(x1.flatten(0, 1))
 			pred = model.wm(h0, a.flatten())
 			wm = F.mse_loss(pred, h1.detach())
-			enc = 0.5 * (u.sigreg(h0) + u.sigreg(h1))
+			enc = 0.5 * (u.sigreg(_flat_h(h0)) + u.sigreg(_flat_h(h1)))
 			loss = cfg["wm_w"] * wm + cfg["enc_w"] * enc
 			if train:
 				opt.zero_grad()
@@ -205,7 +214,7 @@ def _rollout_pass(model, loader, opt, dev, cfg, train):
 		cons = cons.to(dev, non_blocking=True).flatten(0, 1)
 		with torch.set_grad_enabled(train):
 			h0 = model.enc(x0)
-			h0 = h0.unsqueeze(1).expand(-1, acts.shape[1], -1).flatten(0, 1)
+			h0 = _repeat_h(h0, acts.shape[1])
 			_, pred_survival, pred_cons = model.rollout_h(h0, acts.flatten(0, 1))
 			s_loss = F.binary_cross_entropy(pred_survival, survival)
 			c_loss = F.binary_cross_entropy(pred_cons, cons)
@@ -243,7 +252,10 @@ def train(cfg):
 	dev = u.device()
 	pin = dev.type == "cuda"
 	size = cfg["L"] * cfg["U"]
-	model = models.System(size, cfg["H"]).to(dev)
+	wm_type = cfg["wm_type"]
+	evaluator_type = cfg["evaluator_type"]
+	model = models.build_system(size, cfg["L"], cfg["H"], cfg["D"], wm_type, evaluator_type)
+	model = model.to(dev)
 	opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
 	train_t = _transition_loader(train_data, cfg["batch_size"], pin, True)
 	train_r = _rollout_loader(train_data, cfg["batch_size"], pin, True)
@@ -296,7 +308,17 @@ def load_model(cfg, name="best.pt"):
 	state = torch.load(run / name, map_location=dev)
 	model_cfg = state["cfg"]
 	size = model_cfg["L"] * model_cfg["U"]
-	model = models.System(size, model_cfg["H"]).to(dev)
+	depth = model_cfg["L"] * model_cfg["L"] - 1
+	if "D" in model_cfg:
+		depth = model_cfg["D"]
+	wm_type = "flat"
+	if "wm_type" in model_cfg:
+		wm_type = model_cfg["wm_type"]
+	evaluator_type = "gru"
+	if "evaluator_type" in model_cfg:
+		evaluator_type = model_cfg["evaluator_type"]
+	model = models.build_system(size, model_cfg["L"], model_cfg["H"], depth, wm_type, evaluator_type)
+	model = model.to(dev)
 	model.load_state_dict(state["model"])
 	model.eval()
 	return model, dev
@@ -341,7 +363,7 @@ def _score_actions(model, dev, x0, actss):
 			for lo in range(0, acts.shape[0], batch):
 				hi = min(lo + batch, acts.shape[0])
 				chunk = acts[lo:hi].to(dev, non_blocking=True)
-				h = h0.expand(chunk.shape[0], -1)
+				h = _repeat_h(h0, chunk.shape[0])
 				_, survival, cons = model.rollout_h(h, chunk)
 				vals = (survival + cons.sum(1)).cpu()
 				scores[ids[lo:hi]] = vals

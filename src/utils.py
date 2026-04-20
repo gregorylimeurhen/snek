@@ -38,8 +38,10 @@ def load_cfg(path="config.toml"):
 		"split": pre["split"],
 		"test_index": exp["test_index"],
 		"test_limit": test["test_limit"],
+		"evaluator_type": "gru" if "evaluator_type" not in train else train["evaluator_type"],
 		"weight_decay": train.get("weight_decay", 1e-2),
 		"wm_w": train["wm_w"],
+		"wm_type": "flat" if "wm_type" not in train else train["wm_type"],
 	}
 	cfg["D"] = cfg["L"] * cfg["L"] - 1
 	return cfg

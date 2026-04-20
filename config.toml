@@ -1,17 +1,21 @@
-seed = 37
+seed = 0
 data_dir = "data"
-run_name = "rtx3090"
+run_name = "main"
 
 [preprocess]
-L = 4
+L = 6
 U = 1
-dataset_size = 32
+dataset_size = 128
 split = [0.8, 0.1, 0.1]
 
 [train]
-H = 8
 batch_size = 64
 epochs = 80
+
+H = 32
+wm_type = "spatial"
+evaluator_type = "gru"
+
 enc_w = 0.01
 wm_w = 1.0
 eval_w = 1.0
