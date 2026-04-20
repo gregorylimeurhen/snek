@@ -255,7 +255,6 @@ def train(cfg):
 	has_val = val_data["rx0"].shape[0] > 0 or val_data["tx0"].shape[0] > 0
 	patience = cfg["epochs"] // 10 if has_val else None
 	for epoch in range(1, cfg["epochs"] + 1):
-		u.say("epoch " + str(epoch))
 		train_tr = _transition_pass(model, train_t, opt, dev, cfg, True)
 		train_ro = _rollout_pass(model, train_r, opt, dev, cfg, True)
 		with torch.no_grad():
@@ -273,7 +272,13 @@ def train(cfg):
 		hist.append(row)
 		_save(run / "latest.pt", model, opt, cfg, hist, epoch)
 		score = row["val_loss"] if has_val else row["train_loss"]
-		if best is None or score < best:
+		is_best = best is None or score < best
+		val_s = f"{row['val_loss']:.6f}"
+		if has_val and is_best:
+			val_s = "\033[1m" + val_s + "\033[0m"
+		msg = f"epoch {epoch} train_loss={row['train_loss']:.6f} val_loss={val_s}"
+		u.say(msg)
+		if is_best:
 			best = score
 			wait = 0
 			_save(run / "best.pt", model, opt, cfg, hist, epoch)

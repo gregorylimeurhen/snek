@@ -30,7 +30,7 @@ def load_cfg(path="config.toml"):
 		"epochs": train["epochs"],
 		"eval_w": train["eval_w"],
 		"expert_steps": exp["expert_steps"],
-		"lr": train["lr"],
+		"lr": train.get("lr", 1e-3),
 		"planner_samples": test["planner_samples"],
 		"planner_steps": exp["planner_steps"],
 		"run_name": data["run_name"],
@@ -38,7 +38,7 @@ def load_cfg(path="config.toml"):
 		"split": pre["split"],
 		"test_index": exp["test_index"],
 		"test_limit": test["test_limit"],
-		"weight_decay": train["weight_decay"],
+		"weight_decay": train.get("weight_decay", 1e-2),
 		"wm_w": train["wm_w"],
 	}
 	cfg["D"] = cfg["L"] * cfg["L"] - 1
