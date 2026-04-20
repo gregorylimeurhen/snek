@@ -1,6 +1,7 @@
 import pathlib
 import random
 import time
+import tomllib
 import torch
 import src.environment as env
 
@@ -10,6 +11,38 @@ def seed_all(seed):
 	torch.manual_seed(seed)
 	if torch.cuda.is_available():
 		torch.cuda.manual_seed_all(seed)
+
+
+def load_cfg(path="config.toml"):
+	data = tomllib.loads(pathlib.Path(path).read_text())
+	pre = data["preprocess"]
+	train = data["train"]
+	test = data["test"]
+	exp = data["explore"]
+	cfg = {
+		"L": pre["L"],
+		"U": pre["U"],
+		"H": train["H"],
+		"batch_size": train["batch_size"],
+		"data_dir": data["data_dir"],
+		"dataset_size": pre["dataset_size"],
+		"enc_w": train["enc_w"],
+		"epochs": train["epochs"],
+		"eval_w": train["eval_w"],
+		"expert_steps": exp["expert_steps"],
+		"lr": train["lr"],
+		"planner_samples": test["planner_samples"],
+		"planner_steps": exp["planner_steps"],
+		"run_name": data["run_name"],
+		"seed": data["seed"],
+		"split": pre["split"],
+		"test_index": exp["test_index"],
+		"test_limit": test["test_limit"],
+		"weight_decay": train["weight_decay"],
+		"wm_w": train["wm_w"],
+	}
+	cfg["D"] = cfg["L"] * cfg["L"] - 1
+	return cfg
 
 
 def device():

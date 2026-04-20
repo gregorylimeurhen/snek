@@ -11,28 +11,7 @@ import src.utils as u
 
 
 def default_cfg():
-	cfg = {
-		"L": 4,
-		"U": 1,
-		"H": 32,
-		"D": 15,
-		"seed": 0,
-		"dataset_size": 128,
-		"split": [0.8, 0.1, 0.1],
-		"batch_size": 64,
-		"epochs": 20,
-		"lr": 1e-3,
-		"weight_decay": 1e-4,
-		"enc_w": 1e-2,
-		"wm_w": 1.0,
-		"eval_w": 1.0,
-		"planner_samples": 64,
-		"test_limit": 16,
-		"data_dir": "data",
-		"run_name": "baseline",
-	}
-	cfg["D"] = cfg["L"] * cfg["L"] - 1
-	return cfg
+	return u.load_cfg()
 
 
 def _paths(cfg):
@@ -295,23 +274,21 @@ def train(cfg):
 def load_model(cfg, name="best.pt"):
 	_, run = _paths(cfg)
 	dev = u.device()
-	size = cfg["L"] * cfg["U"]
-	model = models.System(size, cfg["H"]).to(dev)
 	state = torch.load(run / name, map_location=dev)
+	model_cfg = state["cfg"]
+	size = model_cfg["L"] * model_cfg["U"]
+	model = models.System(size, model_cfg["H"]).to(dev)
 	model.load_state_dict(state["model"])
 	model.eval()
 	return model, dev
 
 
-def _candidate(sim, depth, first, rng):
+def _legal_candidate(sim, depth, first, rng):
 	snap = sim.snapshot()
 	acts = []
 	sim.step(first)
 	acts.append(u.act_id(first))
-	while len(acts) < depth:
-		if not sim.state.alive:
-			acts.append(0)
-			continue
+	while sim.state.alive and len(acts) < depth:
 		act = rng.choice(env.ACTIONS)
 		sim.step(act)
 		acts.append(u.act_id(act))
@@ -327,20 +304,30 @@ def _planner_batch_size(dev):
 	return 64
 
 
-def _score_actions(model, dev, x0, acts):
+def _score_actions(model, dev, x0, actss):
 	x0 = u.image_f32(x0.unsqueeze(0).to(dev, non_blocking=True))
+	scores = torch.empty(len(actss), dtype=torch.float32)
+	by_len = {}
+	for i, acts in enumerate(actss):
+		n = len(acts)
+		if n not in by_len:
+			by_len[n] = []
+		by_len[n].append((i, acts))
 	with torch.no_grad():
 		h0 = model.enc(x0)
 		batch = _planner_batch_size(dev)
-		scores = []
-		for lo in range(0, acts.shape[0], batch):
-			hi = min(lo + batch, acts.shape[0])
-			chunk = acts[lo:hi].to(dev, non_blocking=True)
-			h = h0.expand(chunk.shape[0], -1)
-			_, survival, cons = model.rollout_h(h, chunk)
-			score = survival + cons.sum(1)
-			scores.append(score.cpu())
-	return torch.cat(scores)
+		for pairs in by_len.values():
+			ids = [i for i, _ in pairs]
+			acts = torch.stack([acts for _, acts in pairs])
+			for lo in range(0, acts.shape[0], batch):
+				hi = min(lo + batch, acts.shape[0])
+				chunk = acts[lo:hi].to(dev, non_blocking=True)
+				h = h0.expand(chunk.shape[0], -1)
+				_, survival, cons = model.rollout_h(h, chunk)
+				vals = (survival + cons.sum(1)).cpu()
+				for j, k in enumerate(ids[lo:hi]):
+					scores[k] = vals[j]
+	return scores
 
 
 def plan_action(model, sim, cfg, rng, dev):
@@ -351,11 +338,10 @@ def plan_action(model, sim, cfg, rng, dev):
 	for i in range(total):
 		first = env.ACTIONS[i] if i < len(env.ACTIONS) else rng.choice(env.ACTIONS)
 		firsts.append(first)
-		acts.append(_candidate(sim, cfg["D"], first, rng))
-	acts = torch.stack(acts)
+		acts.append(_legal_candidate(sim, cfg["D"], first, rng))
 	scores = _score_actions(model, dev, x0, acts)
 	best_i = int(scores.argmax().item())
-	return firsts[best_i], float(scores[best_i].item()), total
+	return firsts[best_i], float(scores[best_i].item()), total, len(acts[best_i])
 
 
 def test(cfg):
@@ -385,14 +371,15 @@ def test(cfg):
 		u.say(msg)
 		while sim.state.alive and steps < cap:
 			t0 = time.perf_counter()
-			act, best, count = plan_action(model, sim, cfg, rng, dev)
+			act, best, count, depth = plan_action(model, sim, cfg, rng, dev)
 			t1 = time.perf_counter()
 			sim.step(act)
 			steps += 1
 			if steps <= 3 or steps % 25 == 0:
 				msg = "episode " + str(i + 1) + " step " + str(steps)
 				msg += " action=" + str(act) + " score=" + str(round(best, 4))
-				msg += " plans=" + str(count) + " plan_s=" + str(round(t1 - t0, 3))
+				msg += " plans=" + str(count) + " best_depth=" + str(depth)
+				msg += " plan_s=" + str(round(t1 - t0, 3))
 				msg += " len=" + str(len(sim.state.snake)) + " alive=" + str(sim.state.alive)
 				msg += " won=" + str(sim.state.won)
 				u.say(msg)

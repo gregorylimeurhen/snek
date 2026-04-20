@@ -1,0 +1,420 @@
+\documentclass[10pt]{article}
+
+\usepackage{algorithm}
+\usepackage[noend]{algpseudocode}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{mathrsfs}
+\usepackage{mleftright}
+\usepackage{parskip}
+\usepackage{physics}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{notation}{Notation}
+\newtheorem{theorem}{Theorem}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\makeatletter
+\def\thm@space@setup{\thm@preskip=\parskip\thm@postskip=0pt}
+\makeatother
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\dom}{\mathrm{dom}}
+\newcommand{\im}{\mathrm{im}}
+
+\title{Snekboros: World Models for Singleplayer Snake}
+\author{Team 5}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% Read comments for more specific implementation details!
+% Henceforth:
+% - all ties shall be broken uniform randomly, if any
+% - stuff (e.g. columns, keys, rows, values, etc.) shall be sorted lexicographically, if any
+
+\section{Introduction}
+
+World models have been proposed as an approach to human-level AI,
+and multiplayer Snake was a community research request of OpenAI.
+As our research contribution,
+we investigate the use of world models for singleplayer Snake.
+
+\section{Methodology}
+
+\subsection{Data}
+
+Let $\mathrm{L}\in\N_{\geq 2}$ be a grid extent,
+and $\mathrm{D}=\mathrm{L}^{2}-1$ be a depth,
+and $\mathcal{G}=[\mathrm{L}]^{2}$ be a grid,
+and $\preceq_{\mathrm{row}}$ be the row-major order on $\mathcal{G}$,
+and $\mathrm{U}\in\N_{\geq 1}$ be an upsampling factor,
+and $\mathcal{X}=\R_{[0,1]}^{\mathrm{L}\mathrm{U}\times\mathrm{L}\mathrm{U}\times 3}$ be an image space.
+% An upsampling factor allows us to talk about the game as an abstract grid purely using L because implementation can just take UL to scale up perfectly with rasterisation
+
+\begin{definition}[Action Space]
+$$
+	\mathcal{A}=\{(0,0),(0,1),(0,-1),(-1,0),(1,0)\}
+$$
+\end{definition}
+
+\begin{definition}[Snake Space]
+$$
+	\mathcal{S}
+	=
+	\bigcup_{n\geq 2}\{
+		\bm{s}\in(\Z\times\Z)^{n}
+		\mid
+		\forall i\in[n-1](
+			s_{i+1}-s_{i}
+			\in
+			\mathcal{A}
+			\setminus
+			\{(0,0)\}
+		)
+	\}
+$$
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{$\textsc{Simulate}(\delta)$}
+\begin{algorithmic}
+	\Require $\delta:\N\to\mathcal{A}$
+	\State ${
+		\bm{s}
+		\sim
+		\mathcal{U}(
+			\{
+				\bm{s}
+				:
+				[2]
+				\hookrightarrow
+				\mathcal{G}
+				\mid
+				s_{2}-s_{1}
+				\in
+				\mathcal{A}
+				\setminus
+				\{(0,0)\}
+			\}
+		)
+	}$
+	\State ${
+		E
+		\gets
+		\mathcal{G}
+		\setminus
+		\{
+			s_{i}
+			\mid
+			i\in[\abs{\bm{s}}]
+		\}
+	}$
+	\If{$E=\varnothing$}
+		\State $f\gets\mathord{\perp}$
+	\Else{}
+		\State $f\gets\min_{\preceq_{\mathrm{row}}}E$
+	\EndIf
+	\State $t\gets 0$
+	\While{$\bm{s}\neq\mathord{\perp}$}
+		\State $i_{f}\gets 0$
+		\State $d\gets\delta(t)$
+		\If{$d=(0,0)$}
+			\State $h\gets 2s_{1}-s_{2}$
+		\Else{}
+			\State $h\gets s_{1}+d$
+		\EndIf
+		\If{$h=f$}
+			\State ${
+				\bm{s}
+				\gets
+				h
+				\parallel
+				(s_{i})_{i=1}^{\abs{\bm{s}}}
+			}$
+			\State $i_{f}\gets 1$
+		\Else{}
+			\State ${
+				\bm{s}
+				\gets
+				h
+				\parallel
+				(s_{i})_{i=1}^{\abs{\bm{s}}-1}
+			}$
+		\EndIf
+
+		\State ${
+			B
+			\gets
+			\{
+				s_{i}
+				\mid
+				i\in[2..\abs{\bm{s}}]
+			\}
+		}$
+		\If{$s_{1}\not\in\mathcal{G}$}
+			\State $\bm{s}\gets\mathord{\perp}$
+		\EndIf
+		\If{$\bm{s}\neq\mathord{\perp}\land s_{1}\in B$}
+			\State $\bm{s}\gets\mathord{\perp}$
+		\EndIf
+
+		\If{$\bm{s}\neq\mathord{\perp}\land i_{f}=1$}
+			\State ${
+				E
+				\gets
+				\mathcal{G}
+				\setminus
+				\mleft\{
+					s_{i}
+					\mid
+					i\in[\abs{\bm{s}}]
+				\mright\}
+			}$
+			\If{$E=\varnothing$}
+				\State $f\gets\mathord{\perp}$
+			\Else{}
+				\State $f\gets\min_{\preceq_{\mathrm{row}}}E$
+			\EndIf
+		\EndIf
+
+		\State $t\gets t+1$
+	\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\begin{table}[H]
+	\centering
+	\begin{tabular}{ll}
+		\toprule
+		\textbf{Cell} & \textbf{Colour} \\
+		\midrule
+		Background & Black \\
+		Snake segment $s_i$ & Blue with brightness $1-\frac{i-1}{\mathrm{L}^2}$ \\
+		Food & Green \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+We colour and render the grid at arbitrary scale using rasterisation.
+
+% When the snake dies/wins, all cells should turn black/white (including the food cell), to semantically imply that both snake and food "are gone" in a loss/win
+
+% These are transition-level quantities
+% They suffice to recover the **state-level** quantities wanted like:
+% - survival_t in {0, 1} if the snake is alive at t
+% - consumption_t in {0, 1} if the snake (head) at t is where the food was at t-1
+
+% To train the subnets or "heads" of the evaluator,
+% we need to store labels of the form
+% (trajectory survival binary, consumption binary at t=1, ..., consumption binary at t=D)
+% for each depth-D trajectory, where:
+% - trajectory survival binary equals 0 if the snake died in the trajectory, and 1 otherwise
+% - consumption binary at t equals 1 if the snake (head) at t is where the food was at t-1
+
+% Define a dataset_size and global seed in config.toml
+% We generate dataset_size episodes using a "random-backbone" perturbed Hamiltonian policy (https://johnflux.com/tag/snake and https://github.com/johnflux/snake_game) with 1-step off-policy branching (for 1-step coverage on each step), meaning that at each live state of the on-policy episode, we additionally simulate each alternative action for exactly one transition, record the resulting one-step sample, and then continue the episode only along the policy action (since each off-policy branch consists of exactly one simulator step from a live state, every branched action is obviously legal)
+% At the start of each episode, the seed:
+% 1. randomly samples a fixed Hamiltonian cycle to use as a backbone for that episode,
+% 2. follows the backbone but takes shortcuts where available (sampling uniform randomly if there happen to be equally good shortcuts)
+% Create a script `preprocess.py` which,
+% with ample print statement for logging:
+% 1. stores episodes containing something like:
+% ((x_0, ..., x_D), (a_1, ..., a_D), trajectory survival binary, (consumption binary at t=1, ..., consumption binary at t=D))
+% where x_t is an image (blown up using \mathrm{U} if >1)
+% 2. splits the data by distinct episodes into train, val, and test
+% using dataset_split = [0.8, 0.1, 0.1] in config.toml
+
+% When a snake dies/wins, the cells should remain black/white as needed for the remainder of the depth-D trajectory
+
+% The data generation should be as algorithmically efficient in asymptotics and wall-clock as possible without changing the actual procedure's meaning
+% The data is fixed after preprocessing
+% We generate and split distinct episodes into disjoint training, validation, and test sets
+
+\subsection{Architecture}
+
+Let $\mathrm{H}\in\N_{\geq 1}$ be a hidden dimensionality,
+and $\mathcal{H}=\R^{\mathrm{H}}$ be a hidden space.
+
+\begin{definition}[Encoder]
+$$
+	\phi:\mathcal{X}\to\mathcal{H}
+$$
+\end{definition}
+
+\begin{definition}[World Model]
+\begin{align*}
+	\mathscr{F}
+	&:
+	\mathcal{H}\times\mathcal{A}
+	\to
+	\mathcal{H}
+\end{align*}
+\end{definition}
+
+\begin{definition}[Evaluator]
+\begin{align*}
+	% "split into two heads, then merge into a sum with coefficient"
+	\mathscr{V}_\mathrm{survival}
+	&:
+	\mathcal{H}^{\mathrm D} % trajectory
+	\to
+	\R_{[0,1]} % probability of trajectory survival
+	,\ 
+	\mathscr{V}_\mathrm{consumption}
+	:
+	\mathcal{H}^{\mathrm D} % trajectory
+	\to
+	\R_{[0,1]}^{\mathrm D} % probability of consumption at each state of trajectory
+	\\
+	\mathscr{V}
+	&:
+	\mathcal{H}^{\mathrm D} % trajectory
+	\to
+	\R_{\geq 0}
+	,\ 
+	\mathscr{V}(\bm{h})
+	=
+	\mathscr{V}_\mathrm{survival}(\bm{h})
+	\bm{\sum}
+	\mathscr{V}_\mathrm{consumption}(\bm{h})
+\end{align*}
+\end{definition}
+
+% The setup, from end to end, must be:
+% Encoder -> World Model -> Evaluator
+% where V_survival is trained to approximate trajectory survival binary
+% and V_consumption is trained to approximate consumption binaries
+
+To avoid representation collapse, we apply SIGReg to encoder outputs by batching
+$$
+	\mathcal{L}_\mathrm{encoder}
+	=
+	\frac{1}{2}
+	\operatorname{SIGReg}(\{\phi(x_{t})\mid t\in B\})
+	+
+	\frac{1}{2}
+	\operatorname{SIGReg}(\{\phi(x_{t+1})\mid t\in B\})
+$$
+to encourage representations to follow an approximately isotropic Gaussian distribution while preserving their usefulness for transition prediction.
+
+% SIGReg is a fairly new technique: https://arxiv.org/pdf/2511.08544)
+% In essence, we have:
+% \lambda_\mathrm{encoder}\mathcal{L}_\mathrm{encoder}
+% + \lambda_\mathrm{wm}\mathcal{L}_\mathrm{wm}
+% + \lambda_\mathrm{evaluator}\mathcal{L}_\mathrm{evaluator}
+
+We use AdamW optimiser.
+\begin{itemize}
+	\item Encoder: tiny CNN to latent state.
+	\item World model: residual action-conditioned MLP in latent space.
+	\item Evaluator: GRU with survival and consumption heads.
+	\item Loss: latent MSE for the world model, binary cross-entropy for evaluator heads, and light SIGReg on encoder outputs.
+\end{itemize}
+
+% We have a `train.py` for training
+% Everything is clean, default, and standard with no other unjustifiable stuffs:
+% - Use settings in `config.toml`
+% - Use early stopping (based on val_loss) with max(0, floor(0.1 * max_epochs)) if val set is not empty; else do not use early stopping
+% - Ensure that if the run crashes (e.g. a KeyboardInterrupt occurs), a checkpoint for the last known epoch should be saved as `latest.pt`; always save the best known epoch as `best.pt` (do not care if `best.pt` equals `latest.pt`, we can keep both)
+% - Use AdamW with default settings
+% - Use CUDA if it exists, else CPU
+% Training loop is observable (with ample print statements for the system time, what settings the run uses, and a tqdm progress bar showing epochs, train_loss, val_loss)
+
+At inference, given an image $x\in\mathcal{X}$, we find
+$$
+	\arg\max_{\bm{a}\in\operatorname{legal}(\mathcal{A})^{\mathrm{D}}}
+	\mathscr{V}\mleft(
+		[
+			f_{1}=\mathscr{F}(\phi(x), a_{1}),
+			f_{2}=\mathscr{F}(f_{1}, a_{2}),
+			\dots,
+			f_{\mathrm{D}}=\mathscr{F}(f_{\mathrm{D}-1},a_{\mathrm{D}})
+		]
+	\mright)
+$$
+where an action is "legal" if it can be made in a game;
+for instance, if a snake (head) is at a cell at the top edge of the grid,
+then "up" is legal (albeit bad/losing), and "up, up", "up, right", etc. are \textbf{illegal}.
+% The planner must not use illegal actions which cannot possibly have been executed during training
+
+% We have a test.py for testing
+% We test our trained systems on the test set using completion rate defined by (consumption count / (\mathrm{L}^{2}-2))
+% since the maximum possible consumption count is \mathrm{L}^{2}-2
+
+\clearpage
+
+\section{Appendix}
+
+\begin{notation}
+Let $n\in\N_{\geq 1}$.
+$$
+	[n]=\N_{[1,n]}
+$$
+\end{notation}
+
+\begin{notation}
+Let $a,b\in\N_{\geq 1}$.
+$$
+	[a..b]=\N_{[a,b]}
+$$
+\end{notation}
+
+\begin{notation}
+Let $x$ be a set, and $\bm{y}$ be a sequence.
+$$
+	x\bm{\in}\bm{y}
+	\equiv
+	x\in\im(\bm{y})
+$$
+\end{notation}
+
+\begin{notation}
+Let $\bm{x},\bm{y}$ be sequences.
+$$
+	\bm{x}\bm{\subseteq}\bm{y}
+	\equiv
+	\im(\bm{x})\subseteq\im(\bm{y})
+$$
+\end{notation}
+
+\begin{notation}
+Let $\bm{x}$ be a sequence, and $y$ be a set.
+$$
+	\bm{x}\bm{\setminus}y
+	=
+	(x_{i})_{i\in\{j\in\dom(\bm{x})\mid x_{j}\not\in y\}}
+$$
+\end{notation}
+
+\begin{notation}
+Let $\bm{x}$ be a sequence.
+$$
+	\abs{\bm{x}}
+	=
+	\abs{\dom(\bm{x})}
+$$
+\end{notation}
+
+\begin{notation}
+Let $n\geq 1$, and $X$ be a set, and $f_{1},\dots,f_{n}:X\to X$.
+$$
+	\bigcirc_{i=1}^{n}f_{i}
+	=
+	f_{n}\circ\dots\circ f_{1}
+$$
+\end{notation}
+
+\end{document}
