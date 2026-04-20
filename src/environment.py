@@ -91,6 +91,9 @@ class Simulator:
 		if not state.alive:
 			return state
 		head = self.head(state.snake, action)
+		if action != (0, 0) and head == state.snake[1]:
+			self.state = State((head,) + state.snake[:-1], None, state.time + 1, False, False)
+			return self.state
 		grew = head == state.food
 		if grew:
 			snake = (head,) + state.snake

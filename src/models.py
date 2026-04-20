@@ -51,8 +51,7 @@ class System(nn.Module):
 		self.wm = WorldModel(hidden_size)
 		self.ev = Evaluator(hidden_size)
 
-	def rollout(self, x0, acts):
-		h = self.enc(x0)
+	def rollout_h(self, h, acts):
 		hs = []
 		for i in range(acts.shape[1]):
 			h = self.wm(h, acts[:, i])
@@ -60,3 +59,7 @@ class System(nn.Module):
 		hs = torch.stack(hs, 1)
 		survival, consumption = self.ev(hs)
 		return hs, survival, consumption
+
+	def rollout(self, x0, acts):
+		h = self.enc(x0)
+		return self.rollout_h(h, acts)

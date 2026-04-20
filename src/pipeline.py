@@ -1,4 +1,5 @@
 import random
+import time
 import torch
 import torch.nn.functional as F
 import torch.utils.data
@@ -122,18 +123,20 @@ def preprocess(cfg):
 	return meta
 
 
-def _transition_loader(data, batch_size, shuffle):
+def _transition_loader(data, batch_size, pin_memory, shuffle):
 	if data["tx0"].shape[0] == 0:
 		return None
 	ds = torch.utils.data.TensorDataset(data["tx0"], data["ta"], data["tx1"])
-	return torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
+	cls = torch.utils.data.DataLoader
+	return cls(ds, batch_size=batch_size, pin_memory=pin_memory, shuffle=shuffle)
 
 
-def _rollout_loader(data, batch_size, shuffle):
+def _rollout_loader(data, batch_size, pin_memory, shuffle):
 	if data["rx0"].shape[0] == 0:
 		return None
 	ds = torch.utils.data.TensorDataset(data["rx0"], data["ra"], data["rs"], data["rc"])
-	return torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
+	cls = torch.utils.data.DataLoader
+	return cls(ds, batch_size=batch_size, pin_memory=pin_memory, shuffle=shuffle)
 
 
 def _transition_pass(model, loader, opt, dev, cfg, train):
@@ -144,9 +147,9 @@ def _transition_pass(model, loader, opt, dev, cfg, train):
 	model.train(train)
 	bar = tqdm.auto.tqdm(loader, leave=False, disable=not train, desc="transition")
 	for x0, a, x1 in bar:
-		x0 = u.image_f32(x0.to(dev))
-		x1 = u.image_f32(x1.to(dev))
-		a = a.to(dev)
+		x0 = u.image_f32(x0.to(dev, non_blocking=True))
+		x1 = u.image_f32(x1.to(dev, non_blocking=True))
+		a = a.to(dev, non_blocking=True)
 		with torch.set_grad_enabled(train):
 			h0 = model.enc(x0)
 			h1 = model.enc(x1)
@@ -176,10 +179,10 @@ def _rollout_pass(model, loader, opt, dev, cfg, train):
 	model.train(train)
 	bar = tqdm.auto.tqdm(loader, leave=False, disable=not train, desc="rollout")
 	for x0, acts, survival, cons in bar:
-		x0 = u.image_f32(x0.to(dev))
-		acts = acts.to(dev)
-		survival = survival.to(dev)
-		cons = cons.to(dev)
+		x0 = u.image_f32(x0.to(dev, non_blocking=True))
+		acts = acts.to(dev, non_blocking=True)
+		survival = survival.to(dev, non_blocking=True)
+		cons = cons.to(dev, non_blocking=True)
 		with torch.set_grad_enabled(train):
 			_, pred_survival, pred_cons = model.rollout(x0, acts)
 			s_loss = F.binary_cross_entropy(pred_survival, survival)
@@ -216,13 +219,14 @@ def train(cfg):
 	train_data = torch.load(run / "train.pt", map_location="cpu")
 	val_data = torch.load(run / "val.pt", map_location="cpu")
 	dev = u.device()
+	pin = dev.type == "cuda"
 	size = cfg["L"] * cfg["U"]
 	model = models.System(size, cfg["H"]).to(dev)
 	opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
-	train_t = _transition_loader(train_data, cfg["batch_size"], True)
-	train_r = _rollout_loader(train_data, cfg["batch_size"], True)
-	val_t = _transition_loader(val_data, cfg["batch_size"], False)
-	val_r = _rollout_loader(val_data, cfg["batch_size"], False)
+	train_t = _transition_loader(train_data, cfg["batch_size"], pin, True)
+	train_r = _rollout_loader(train_data, cfg["batch_size"], pin, True)
+	val_t = _transition_loader(val_data, cfg["batch_size"], pin, False)
+	val_r = _rollout_loader(val_data, cfg["batch_size"], pin, False)
 	hist = []
 	best = None
 	wait = 0
@@ -286,28 +290,43 @@ def _candidate(sim, depth, first, rng):
 	return torch.tensor(acts, dtype=torch.long)
 
 
-def _score(model, dev, x0, acts):
-	x0 = u.image_f32(x0.unsqueeze(0).to(dev))
-	acts = acts.unsqueeze(0).to(dev)
+def _planner_batch_size(dev):
+	if dev.type == "cuda":
+		return 256
+	if dev.type == "mps":
+		return 128
+	return 64
+
+
+def _score_actions(model, dev, x0, acts):
+	x0 = u.image_f32(x0.unsqueeze(0).to(dev, non_blocking=True))
 	with torch.no_grad():
-		_, survival, cons = model.rollout(x0, acts)
-	score = survival + cons.sum(1)
-	return float(score.item())
+		h0 = model.enc(x0)
+		batch = _planner_batch_size(dev)
+		scores = []
+		for lo in range(0, acts.shape[0], batch):
+			hi = min(lo + batch, acts.shape[0])
+			chunk = acts[lo:hi].to(dev, non_blocking=True)
+			h = h0.expand(chunk.shape[0], -1)
+			_, survival, cons = model.rollout_h(h, chunk)
+			score = survival + cons.sum(1)
+			scores.append(score.cpu())
+	return torch.cat(scores)
 
 
 def plan_action(model, sim, cfg, rng, dev):
 	x0 = u.image_u8(sim.display())
-	best = None
-	best_score = None
 	total = max(len(env.ACTIONS), cfg["planner_samples"])
+	acts = []
+	firsts = []
 	for i in range(total):
 		first = env.ACTIONS[i] if i < len(env.ACTIONS) else rng.choice(env.ACTIONS)
-		acts = _candidate(sim, cfg["D"], first, rng)
-		score = _score(model, dev, x0, acts)
-		if best_score is None or score > best_score:
-			best_score = score
-			best = first
-	return best
+		firsts.append(first)
+		acts.append(_candidate(sim, cfg["D"], first, rng))
+	acts = torch.stack(acts)
+	scores = _score_actions(model, dev, x0, acts)
+	best_i = int(scores.argmax().item())
+	return firsts[best_i], float(scores[best_i].item()), total
 
 
 def test(cfg):
@@ -319,6 +338,9 @@ def test(cfg):
 	limit = n if cfg["test_limit"] < 1 else min(n, cfg["test_limit"])
 	rng = random.Random(cfg["seed"] + 1)
 	scores = []
+	msg = "test device=" + str(dev) + " episodes=" + str(limit)
+	msg += " planner_samples=" + str(cfg["planner_samples"])
+	u.say(msg)
 	bar = tqdm.auto.tqdm(range(limit), desc="test")
 	for i in bar:
 		sim_seed = rng.randrange(1 << 63)
@@ -328,12 +350,29 @@ def test(cfg):
 		sim.reset(snake, food)
 		cap = 4 * cfg["L"] * cfg["L"] * max(1, cfg["L"] * cfg["L"] - 2)
 		steps = 0
+		t_ep = time.perf_counter()
+		msg = "episode " + str(i + 1) + "/" + str(limit)
+		msg += " start food=" + str(food) + " cap=" + str(cap)
+		u.say(msg)
 		while sim.state.alive and steps < cap:
-			act = plan_action(model, sim, cfg, rng, dev)
+			t0 = time.perf_counter()
+			act, best, count = plan_action(model, sim, cfg, rng, dev)
+			t1 = time.perf_counter()
 			sim.step(act)
 			steps += 1
+			if steps <= 3 or steps % 25 == 0:
+				msg = "episode " + str(i + 1) + " step " + str(steps)
+				msg += " action=" + str(act) + " score=" + str(round(best, 4))
+				msg += " plans=" + str(count) + " plan_s=" + str(round(t1 - t0, 3))
+				msg += " len=" + str(len(sim.state.snake)) + " alive=" + str(sim.state.alive)
+				msg += " won=" + str(sim.state.won)
+				u.say(msg)
 		score = u.completion(sim.state, cfg["L"])
 		scores.append(score)
+		t_done = round(time.perf_counter() - t_ep, 3)
+		msg = "episode " + str(i + 1) + " done steps=" + str(steps)
+		msg += " completion=" + str(round(score, 4)) + " time_s=" + str(t_done)
+		u.say(msg)
 		bar.set_postfix(score=sum(scores) / len(scores))
 	mean = 0.0 if not scores else sum(scores) / len(scores)
 	out = {"mean_completion": mean, "n": len(scores), "scores": scores}
